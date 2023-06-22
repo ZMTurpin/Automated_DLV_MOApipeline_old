@@ -1,0 +1,70 @@
+#!/bin/bash
+#ZMT_090718_tested091018
+
+#This script is intended to automate the Bass Lab standardized pipeline (originally developed in R by Daniel Vera) for processing fastq files from PE Illumina NGS into segmentation-ready bedgraph files and browser-ready bigwig files.
+
+
+#NOTE: this script is generalized and contains commented lines requiring paths to genome indices (bt2), "chromsizes" files, and is intended to be run from a directory containing fastq files.
+
+#This assumes you have already installed DLV's R packages ; if not, see the following: file:///Users/zachturpin/Desktop/SuppFile2_DNS_Pipeline.html
+
+#alignment script assumes bt2 indices exist
+
+#MAKE A DATE-STAMPED COPY OF THIS SCRIPT INTO THE DIRECTORY CONTAINING YOUR FASTQ FILES. INSERT ABSOLUTE PATHS FROM YOUR HOME DIRECTORY "~/" TO THESE FILES:
+
+#THIS SCRIPT DOES NOT CONTAIN COMMANDS TO COMBINE ALIGNMENTS ACROSS REPLICATES OR SAMPLES. THESE STEPS CAN BE ADDED AFTER MARKING DUPLICATE READS. 
+
+#set path to genome.fa
+	genome=path_to_genome.fa
+#make chromsizes and chromsizes_chr
+	samtools faidx $genome
+	cut -f1,2 $genome.fai > sizes.genome
+#prepare a new chromsizes file from topline sequences that contains only chr1-10
+#note: for v3 genome, replace "B73V4_ctg" with "scaffold*"
+	grep -v "B73V4_ctg*" PATH_TO_sizes.genome | grep -v "Mt" | grep -v "Pt" >> B73v4_sizes_chr.genome
+#set path to toplevel_chromsizes, chromsizes_chr, and path to index prefix
+	toplevel_chromsizes=path_to_toplevel_chromsizes
+	chromsizes_chr=path_to_chromsizes_chr
+	index_prefix=path_to_index_prefix
+
+#editing commands here to copy R script and add your paths to new version of MOA_alignment.R
+_date=$(date +"%m_%d_%Y")
+_newname="MOA_alignment_$_date.R"
+cp MOA_alignment.R $_newname
+MOA_CMD=($_newname)
+sed -i "s|INSERT_PATH_TO_TOPLEVEL_CHROMSIZES_HERE|$toplevel_chromsizes|g" $_newname
+sed -i "s|INSERT_PATH_TO_INDEX_PREFIX|$index_prefix|g" $_newname
+
+#run trimming/alignment
+Rscript $_newname
+
+#filter alignments to non-chromosomal loci from sam files (no unassigned contigs or MT/PT)
+#sort bam files by coordinate
+	for bams in *.bam ; do samtools sort -o $bams.coord.bam -@ 8 $bams ; done
+#index bam files
+	for bams in *coord.bam ; do samtools index $bams ; done
+#filter by chromosome
+	for bams in *.coord.bam ; do samtools view -b $bams 1 2 3 4 5 6 7 8 9 10 > $bams.chr.bam ; done
+#mark duplicate reads
+	#sort alignments by read name
+		for bams in *chr.bam ; do samtools sort -n -@ 8 -o $bams.nameSort.bam $bams ; done
+	#fixmates
+		for nbams in *.nameSort.bam ; do nohup samtools fixmate -m -@ 8 $nbams $nbams.fm.bam ; done
+	#positionsort
+		for fm in *.fm.bam ; do samtools sort -@ 8 -o $fm.posSort.bam $fm ; done
+	#markdup
+		for ps in *.posSort.bam ; do samtools markdup -@ 8 $ps $ps.mkdup.bam ; done
+	#namesort
+		for mk in *.mkdup.bam ; do samtools sort -n -@ -8 -o $mk.nameSort.bam $mk ; done
+
+#IF REQUIRED, INSERT REPLICATE AND SAMPLE MERGING COMMANDS HERE. SEE merge_rmdup_bams.sh FOR AN EXAMPLE.
+
+#editing commands here to copy R script and add your paths to new version of MOA_normalize.R
+_date=$(date +"%m_%d_%Y")
+_newname2="MOA_normalize_$_date.R"
+cp MOA_normalize.R $_newname2
+MOA_CMD2=($_newname2)
+sed -i "s|INSERT_PATH_TO_CHROMSIZES_CHR|$chromsizes_chr|g" $_newname2
+chmod +x $_newname2
+#run Rscript_2
+Rscript $_newname2
